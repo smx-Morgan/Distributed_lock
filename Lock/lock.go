@@ -37,15 +37,15 @@ func (c *Client) TryLock(ctx context.Context, key string, expiration time.Durati
 
 type Lock struct {
 	client redis.Cmdable
-	key    string
-	value  string
+	Key    string
+	Value  string
 }
 
 func newLock(client redis.Cmdable, key string, value string) *Lock {
 	return &Lock{
 		client: client,
-		key:    key,
-		value:  value,
+		Key:    key,
+		Value:  value,
 	}
 }
 
@@ -79,7 +79,7 @@ func (l *Lock) UnLock(ctx context.Context) error {
 
 	*/
 
-	res, err := l.client.Eval(ctx, luaUnlock, []string{l.key}, l.value).Int64()
+	res, err := l.client.Eval(ctx, luaUnlock, []string{l.Key}, l.Value).Int64()
 	if redis.Nil == err {
 		return ErrLockNotHold
 	}
