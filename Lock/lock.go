@@ -20,9 +20,58 @@ var (
 	ErrFailedTOPreemptLock = errors.New("加锁失败")
 )
 
+var (
+	//go:embed unlock.lua
+	luaUnlock string
+	//go:embed refresh.lua
+	luaRefresh string
+	//go:embed lock.lua
+	luaLock string
+)
+
 func NewClient(client redis.Cmdable) *Client {
 	return &Client{client: client}
 }
+func (c *Client) Lock(ctx context.Context, key string,
+	expiration time.Duration, retry RetryStrategy, timeout time.Duration) (*Lock, error) {
+	value := uuid.New().String()
+	//计时器
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		lctx, cancel := context.WithTimeout(ctx, timeout)
+		res, err := c.client.Eval(lctx, luaLock, []string{key}, value, expiration).Bool()
+		cancel()
+
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		//如果是超时
+		if res {
+			return newLock(c.client, key, value, expiration), nil
+		}
+		interval, ok := retry.Next()
+		if !ok {
+			return nil, ErrFailedTOPreemptLock
+		}
+		//重试间隔，计时器
+		if timer != nil {
+			timer = time.NewTimer(interval)
+		}
+		timer.Reset(interval)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+
+		}
+	}
+}
+
 func (c *Client) TryLock(ctx context.Context, key string, expiration time.Duration) (*Lock, error) {
 	value := uuid.New().String()
 	res, err := c.client.SetNX(ctx, key, value, expiration).Result()
@@ -103,13 +152,6 @@ func (l *Lock) Refresh(ctx context.Context) error {
 	}
 	return nil
 }
-
-var (
-	//go:embed unlock.lua
-	luaUnlock string
-	//go:embed refresh.lua
-	luaRefresh string
-)
 
 func (l *Lock) UnLock(ctx context.Context) error {
 	//确保是这把锁
